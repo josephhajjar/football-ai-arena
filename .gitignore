@@ -1,0 +1,8 @@
+node_modules/
+*.log
+__pycache__/
+*.pyc
+replay*.json
+!examples/replay_example.json
+my_weights.json
+.env

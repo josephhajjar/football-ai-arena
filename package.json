@@ -1,0 +1,13 @@
+{
+  "name": "football-ai-arena",
+  "version": "1.0.0",
+  "description": "Train two AI cubes to play 3D football, then face your friend's AIs.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/server.js",
+    "docs": "node tools/gen_rules.js",
+    "test": "node test/smoke.js && node test/effects.js && node test/minigames_test.js && node test/ws_flow_test.js",
+    "validate": "node tools/validate.js",
+    "play": "node tools/play.js"
+  }
+}

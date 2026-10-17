@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Football AI Arena</title>
+<link rel="stylesheet" href="/style.css">
+<script type="importmap">{ "imports": { "three": "/vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<div id="stage" class="hidden">
+  <div id="canvasWrap"></div>
+  <div id="hud">
+    <div id="hudTop">
+      <div id="matchInfo"></div>
+      <div id="scoreboard">
+        <span id="nameBlue" class="tb blue">Blue</span>
+        <span id="scoreBlue" class="sc">0</span><span class="colon">:</span><span id="scoreRed" class="sc">0</span>
+        <span id="nameRed" class="tb red">Red</span>
+        <div id="clock">0:00</div>
+      </div>
+      <div id="stageActions"><button id="btnLeave" class="ghost">✕ Close</button></div>
+    </div>
+    <div id="feed"></div>
+    <div id="banner"></div>
+    <div id="targetHint" class="hidden"></div>
+    <div id="chooser" class="hidden"></div>
+    <div id="shopWrap" class="hidden"><div id="coinChip">🪙 0</div><div id="shop"></div></div>
+    <div id="hudBottom">
+      <div id="cams"></div>
+      <div id="playback" class="hidden">
+        <button id="pbRestart" title="Restart">⏮</button>
+        <button id="pbPlay" title="Pause / play (space)">⏸</button>
+        <input id="pbSeek" type="range" min="0" max="1000" value="0">
+        <select id="pbSpeed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+        <button id="pbNext" title="Next match">⏭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<main id="app">
+  <header>
+    <h1>⚽ Football AI Arena</h1>
+    <div id="roomTag" class="hidden"></div>
+  </header>
+  <div id="notice" class="hidden"></div>
+  <section id="home">
+    <div class="card">
+      <h2>Play online</h2>
+      <label>Your name <input id="inName" maxlength="20" placeholder="Player"></label>
+      <div class="row">
+        <button id="btnCreate" class="primary">Create room</button>
+        <span class="or">or</span>
+        <input id="inCode" maxlength="4" placeholder="CODE" class="code">
+        <button id="btnJoin">Join</button>
+        <button id="btnWatch" class="ghost">Watch</button>
+      </div>
+      <p class="hint">Create a room, send the 4-letter code to your friend, then train your two AIs before the timer ends.</p>
+    </div>
+    <div class="card">
+      <h2>Get the training kit</h2>
+      <p>Everything your AI needs: the exact simulator, a Gymnasium-style environment, export helpers and the rules.</p>
+      <div class="row">
+        <a class="btn primary" href="/kit.zip" download>⬇ Download kit (.zip)</a>
+        <button id="btnCopyRules">📋 Copy rules for my AI</button>
+        <a class="btn ghost" href="/RULES.md" target="_blank">Open RULES.md</a>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Practice &amp; replays <small>(runs in your browser, nothing is uploaded)</small></h2>
+      <div class="grid2">
+        <label>Blue weights file <input id="pracBlue" type="file" accept=".json"></label>
+        <label>Opponent
+          <select id="pracOppKind"><option value="chaser">Bot: chaser</option><option value="idle">Bot: idle</option><option value="random">Bot: random</option><option value="file">Weights file…</option></select>
+        </label>
+      </div>
+      <label id="pracRedWrap" class="hidden">Red weights file <input id="pracRed" type="file" accept=".json"></label>
+      <div class="row"><button id="btnPractice" class="primary">▶ Run practice series</button>
+        <label class="inline">or load a replay <input id="replayFile" type="file" accept=".json"></label></div>
+      <div id="pracMsg" class="hint"></div>
+    </div>
+  </section>
+
+  <section id="room" class="hidden"></section>
+</main>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
