@@ -71,13 +71,14 @@ export class MiniUI {
 
   // ---------- play ----------
   start(m) {
-    this.state = 'play'; this.gid = m.id; this.cur = this.prev = null; this.mem = {}; this.parts = []; this.myTarget = null; this.myPad = null; this.lastCount = -1; this.keys.clear(); this.seq = 0; this.mouse = null; this.joy = null;
+    this.state = 'play'; this.gid = m.id; this.cur = this.prev = null; this.cycTrails = null; this.mem = {}; this.parts = []; this.myTarget = null; this.myPad = null; this.lastCount = -1; this.keys.clear(); this.seq = 0; this.mouse = null; this.joy = null;
     this.q('#mgTitle').textContent = m.name; this.q('#mgHelp').textContent = m.help; this.q('#mgBanner').textContent = '';
     this.q('#mgTouch').classList.toggle('hidden', !(m.id === 'sumo' || m.id === 'tag') || !('ontouchstart' in window));
     this.q('#mgTurn').classList.toggle('hidden', !(m.id === 'cycles') || !('ontouchstart' in window));
     this.show('mgPlay'); this.resize();
   }
   snapshot(s) {
+    if (s.g === 'cycles') { if (s.trails) this.cycTrails = s.trails; else s.trails = this.cycTrails || [[], []]; }
     this.prev = this.cur; this.tPrev = this.tCur; this.cur = s; this.tCur = performance.now();
     const side = this.getSide(), you = side === 0 ? 'YOU' : '', opp = side === 1 ? 'YOU' : '';
     this.q('#mgScore').innerHTML = `<b style="color:${BLUE}">${you ? 'YOU ' : 'Blue '}${s.scores[0]}</b> : <b style="color:${RED}">${s.scores[1]} ${opp ? 'YOU' : 'Red'}</b>`;
@@ -148,7 +149,7 @@ export class MiniUI {
     this.q('#mgR').addEventListener('pointerdown', (e) => { e.preventDefault(); this.turn(1); });
     setInterval(() => { if (this.state === 'play') { this.sendMove(true); } }, 80);
   }
-  turn(t) { this.net.send({ t: 'mg_input', i: { turn: t, seq: ++this.seq } }); }
+  turn(t) { this.mem.turnAt = performance.now(); this.net.send({ t: 'mg_input', i: { turn: t, seq: ++this.seq } }); }
   sendMove(force) {
     if (this.gid === 'sumo' || this.gid === 'tag') {
       let mx = (this.keys.has('d') || this.keys.has('arrowright') ? 1 : 0) - (this.keys.has('a') || this.keys.has('arrowleft') ? 1 : 0);
@@ -292,6 +293,13 @@ export class MiniUI {
     if (s.phase === 'roundEnd' && m.phase !== 'roundEnd' && /blew/.test(s.banner)) { this.burst(hx, hy, 90, '#ff9d2b', sc * 18); this.burst(hx, hy, 40, '#fff', sc * 12); this.shakeNow(18); sfx.explode(); }
     m.flash = s.flash; m.phase = s.phase;
   }
+  // where a cycle's head is drawn right now: its cell plus how far it has moved toward the next one
+  headPos(s, i, cx, cy, sc) {
+    const c = s.c[i], DX = [1, 0, -1, 0], DY = [0, 1, 0, -1];
+    let p = 0;
+    if (!c[3] && s.iv && s.phase === 'play') p = clamp((s.fr || 0) + (performance.now() - this.tCur) / 1000 / s.iv, 0, 1);
+    return [cx + (c[0] + DX[c[2]] * p) * sc + sc / 2, cy + (c[1] + DY[c[2]] * p) * sc + sc / 2];
+  }
   drawCycles(g, s, W, H, t) {
     const sc = Math.min(W * 0.94 / s.W, H * 0.8 / s.H), cx = W / 2 - s.W * sc / 2, cy = H / 2 - s.H * sc / 2 + 12, me = this.getSide();
     g.drawImage(this.layer('cyc' + s.W + 'x' + s.H, W, H, (g) => {
@@ -302,12 +310,14 @@ export class MiniUI {
       const col = i === 0 ? '#3d84ff' : '#ff5a4d'; if (!tr.length) return;
       g.save(); g.shadowColor = col; g.shadowBlur = 14; g.strokeStyle = col; g.lineWidth = sc * 0.62; g.lineJoin = 'round'; g.lineCap = 'round'; g.beginPath();
       tr.forEach((idx, k) => { const px = cx + (idx % s.W) * sc + sc / 2, py = cy + Math.floor(idx / s.W) * sc + sc / 2; if (k) g.lineTo(px, py); else g.moveTo(px, py); });
+      const hd = this.headPos(s, i, cx, cy, sc); if (hd && !s.c[i][3]) g.lineTo(hd[0], hd[1]);
       g.stroke(); g.restore();
     });
     const m = this.mem; m.dead = m.dead || [0, 0];
     s.c.forEach((c, i) => { if (c[3] && !m.dead[i]) { this.burst(cx + c[0] * sc + sc / 2, cy + c[1] * sc + sc / 2, 50, i ? '#ff8a7e' : '#8fb8ff', sc * 14); this.shakeNow(12); sfx.crash(); } m.dead[i] = c[3]; });
     s.c.forEach((c, i) => {
-      const x = cx + c[0] * sc + sc / 2, y = cy + c[1] * sc + sc / 2;
+      const hd = this.headPos(s, i, cx, cy, sc), x = hd[0], y = hd[1];
+      if (i === me && performance.now() - (this.mem.turnAt || 0) < 200) { g.strokeStyle = '#fff'; g.lineWidth = 3; g.globalAlpha = 0.7; g.beginPath(); g.arc(x, y, sc * 1.9, 0, 7); g.stroke(); g.globalAlpha = 1; }
       g.save(); g.shadowColor = '#fff'; g.shadowBlur = 10; g.fillStyle = c[3] ? '#ff9d2b' : '#fff'; g.beginPath(); g.arc(x, y, sc * (c[3] ? 1.4 + 0.3 * Math.sin(t * 20) : 0.75), 0, 7); g.fill(); g.restore();
       if (i === me) { g.fillStyle = '#fff'; g.font = 'bold 12px system-ui'; g.textAlign = 'center'; g.fillText('YOU', x, y - sc * 1.3); }
     });

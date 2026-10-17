@@ -40,7 +40,7 @@ class Round {
       if (this.scores[winner] >= this.need) { this.done = true; this.winner = winner; }
     }
   }
-  snapshot() { return { phase: this.phase, timer: r2(Math.max(0, this.timer)), scores: this.scores, round: this.round, need: this.need, banner: this.banner, ...this.state() }; }
+  snapshot(full = false) { return { phase: this.phase, timer: r2(Math.max(0, this.timer)), scores: this.scores, round: this.round, need: this.need, banner: this.banner, ...this.state(full) }; }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -154,7 +154,7 @@ class Cycles extends Round {
     this.cy = [{ x: 6, y: 13, d: 0, dead: false, q: [], seq: -1 }, { x: 39, y: 13, d: 2, dead: false, q: [], seq: -1 }];
     this.cy.forEach((c, i) => { this.grid[c.y * this.W + c.x] = i + 1; });
     this.trails = [[this.cy[0].y * this.W + this.cy[0].x], [this.cy[1].y * this.W + this.cy[1].x]];
-    this.acc = 0; this.t = 0;
+    this.acc = 0; this.t = 0; this.n = 0; this.sentN = -1; this.iv = 0.115; this.frac = 0;
     this.input.forEach((i) => { delete i.turn; });
   }
   stepPlay(dt) {
@@ -164,9 +164,11 @@ class Cycles extends Round {
       if (inp.turn && inp.seq !== c.seq) { c.seq = inp.seq; if (c.q.length < 2) c.q.push(inp.turn); }
     });
     const interval = Math.max(0.065, 0.115 - this.t * 0.0011);
+    this.iv = interval;
     this.acc += dt;
     while (this.acc >= interval && this.phase === 'play') {
       this.acc -= interval;
+      this.n++;
       const nx = [], DX = [1, 0, -1, 0], DY = [0, 1, 0, -1];
       for (const c of this.cy) { const t = c.q.shift(); if (t) c.d = (c.d + t + 4) % 4; nx.push([c.x + DX[c.d], c.y + DY[c.d]]); }
       const crash = nx.map(([x, y]) => x < 0 || y < 0 || x >= this.W || y >= this.H || this.grid[y * this.W + x] !== 0);
@@ -176,8 +178,14 @@ class Cycles extends Round {
       else if (crash[0]) this.endRound(1, 'Blue crashed!');
       else if (crash[1]) this.endRound(0, 'Red crashed!');
     }
+    this.frac = Math.min(1, this.acc / interval);
   }
-  state() { return { g: 'cycles', W: this.W, H: this.H, c: this.cy.map((c) => [c.x, c.y, c.d, c.dead ? 1 : 0]), trails: this.trails }; }
+  // trails are big: only send them when a step happened since the last send (or when a full copy is requested)
+  state(full) {
+    const send = full || this.sentN !== this.n;
+    if (send) this.sentN = this.n;
+    return { g: 'cycles', W: this.W, H: this.H, c: this.cy.map((c) => [c.x, c.y, c.d, c.dead ? 1 : 0]), n: this.n, iv: r2(this.iv * 1000) / 1000, fr: r2(this.frac), trails: send ? this.trails : undefined };
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -303,7 +311,7 @@ export class MiniSession {
   resync() {
     const out = [];
     if (this.phase === 'invite') { out.push(this.inviteMsg); out.push({ t: 'mg_joined', joined: this.joined }); }
-    else if (this.phase === 'play' && this.game) { out.push({ t: 'mg_start', id: this.gameId, name: this.meta.name, help: this.meta.help, need: this.game.need }); out.push({ t: 'mg', s: this.game.snapshot() }); }
+    else if (this.phase === 'play' && this.game) { out.push({ t: 'mg_start', id: this.gameId, name: this.meta.name, help: this.meta.help, need: this.game.need }); out.push({ t: 'mg', s: this.game.snapshot(true) }); }
     else if (this.phase === 'result' && this.result) out.push({ t: 'mg_result', id: this.gameId, name: this.meta.name, ...this.result });
     return out;
   }
@@ -343,11 +351,11 @@ export class MiniSession {
       const dt = Math.min(0.1, (t - this.lastTick) / 1000); this.lastTick = t;
       this.game.step(dt, t);
       this.sendAcc += dt;
-      const every = this.gameId === 'cycles' ? 1 / 30 : 1 / 60;
+      const every = 1 / 60;
       if (this.sendAcc >= every) { this.sendAcc = 0; this.send({ t: 'mg', s: this.game.snapshot() }); }
       if (this.game.phase === 'done') {
         const g = this.game;
-        this.send({ t: 'mg', s: g.snapshot() });
+        this.send({ t: 'mg', s: g.snapshot(true) });
         this.finish({ winner: g.winner, scores: g.scores.slice(), coins: coinsFor(this.gameId, g.winner, g.roundsWon, this.coinMult) });
       }
       return;
