@@ -25,6 +25,7 @@ export class MiniUI {
     this.q = (s) => this.el.querySelector(s);
     this.canvas = this.q('#mgCanvas'); this.g = this.canvas.getContext('2d');
     this.state = 'idle'; this.cur = null; this.prev = null; this.tCur = 0; this.tPrev = 0; this.gid = null;
+    this.parts = []; this.shake = 0; this.mem = {}; this.myTarget = null; this.myPad = null; this.lastDraw = performance.now();
     this.keys = new Set(); this.seq = 0; this.lastSent = ''; this.lastSendAt = 0; this.mouse = null; this.joy = null; this.lastCount = -1;
     this.bind();
     const loop = () => { this.draw(); requestAnimationFrame(loop); };
@@ -70,7 +71,7 @@ export class MiniUI {
 
   // ---------- play ----------
   start(m) {
-    this.state = 'play'; this.gid = m.id; this.cur = this.prev = null; this.lastCount = -1; this.keys.clear(); this.seq = 0; this.mouse = null; this.joy = null;
+    this.state = 'play'; this.gid = m.id; this.cur = this.prev = null; this.mem = {}; this.parts = []; this.myTarget = null; this.myPad = null; this.lastCount = -1; this.keys.clear(); this.seq = 0; this.mouse = null; this.joy = null;
     this.q('#mgTitle').textContent = m.name; this.q('#mgHelp').textContent = m.help; this.q('#mgBanner').textContent = '';
     this.q('#mgTouch').classList.toggle('hidden', !(m.id === 'sumo' || m.id === 'tag') || !('ontouchstart' in window));
     this.q('#mgTurn').classList.toggle('hidden', !(m.id === 'cycles') || !('ontouchstart' in window));
@@ -170,36 +171,71 @@ export class MiniUI {
     const r = this.canvas.getBoundingClientRect(), px = (e.clientX - r.left) * (this.canvas.width / r.width) / this.dpr, py = (e.clientY - r.top) * (this.canvas.height / r.height) / this.dpr;
     const x = (px - this.hk.ox) / this.hk.s, z = (py - this.hk.oy) / this.hk.s, now = performance.now();
     if (now - (this.lastPtr || 0) < 28) return; this.lastPtr = now;
+    const side = this.getSide(), c = this.cur;
+    this.myTarget = { x: clamp(x, side === 0 ? -c.hw + c.pr : 0.4 + c.pr * 0.3, side === 0 ? -0.4 - c.pr * 0.3 : c.hw - c.pr), z: clamp(z, -c.hh + c.pr, c.hh - c.pr), t: performance.now() };
     this.net.send({ t: 'mg_input', i: { x, z } });
   }
 
   resize() {
-    this.dpr = Math.min(devicePixelRatio || 1, 2);
+    this.dpr = Math.min(devicePixelRatio || 1, 1.5);
     this.canvas.width = innerWidth * this.dpr; this.canvas.height = innerHeight * this.dpr;
     this.canvas.style.width = innerWidth + 'px'; this.canvas.style.height = innerHeight + 'px';
   }
 
   // ---------- drawing ----------
+  // Dead reckoning: draw where things are *now* (last snapshot + velocity), not where they were one update ago.
   interp() {
     const s = this.cur; if (!s) return null;
-    const dt = this.tCur - this.tPrev, a = this.prev && dt > 1 ? clamp((performance.now() - this.tCur) / dt, 0, 1) : 1;
-    const P = this.prev && this.prev.g === s.g ? this.prev : s;
-    const mix = (x, y) => (Array.isArray(x) ? x.map((v, i) => mix(v, y[i])) : typeof x === 'number' && typeof y === 'number' ? lerp(y, x, a) : x);
-    return { ...s, p: s.p ? mix(s.p, P.p) : undefined, puck: s.puck ? mix(s.puck, P.puck) : undefined, pad: s.pad ? mix(s.pad, P.pad) : undefined };
+    const e = clamp((performance.now() - this.tCur) / 1000, 0, 0.12), out = { ...s };
+    if (s.p) out.p = s.p.map((p) => [p[0] + p[2] * e, p[1] + p[3] * e, ...p.slice(2)]);
+    if (s.puck) out.puck = [s.puck[0] + s.puck[2] * e, s.puck[1] + s.puck[3] * e, s.puck[2], s.puck[3]];
+    if (s.pad) {
+      const P = this.prev && this.prev.g === 'hockey' ? this.prev.pad : s.pad, dt = Math.max(8, this.tCur - this.tPrev) / 1000;
+      out.pad = s.pad.map((p, i) => [p[0] + ((p[0] - P[i][0]) / dt) * e, p[1] + ((p[1] - P[i][1]) / dt) * e]);
+    }
+    return out;
   }
+  // draw expensive static art (glows, grids) once into an offscreen canvas, then just blit it each frame
+  layer(key, W, H, fn) {
+    const c = (this.layers = this.layers || {}), k = key + '|' + W + 'x' + H + '|' + this.dpr;
+    if (!c[k]) {
+      const cv = document.createElement('canvas'); cv.width = Math.round(W * this.dpr); cv.height = Math.round(H * this.dpr);
+      const x = cv.getContext('2d'); x.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); fn(x); c[k] = cv;
+      const keys = Object.keys(c); if (keys.length > 14) delete c[keys[0]];
+    }
+    return c[k];
+  }
+  burst(x, y, n, col, speed) { for (let i = 0; i < n; i++) { const a = Math.random() * 6.283, v = speed * (0.3 + Math.random()); this.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.5 + Math.random() * 0.4, max: 0.9, col, r: 2 + Math.random() * 3 }); } }
+  shakeNow(a) { this.shake = Math.max(this.shake, a); }
   draw() {
     if (this.state !== 'play' || !this.cur) return;
     const g = this.g, W = innerWidth, H = innerHeight, s = this.interp(); if (!s) return;
+    const nowMs = performance.now(), dt = Math.min(0.05, (nowMs - this.lastDraw) / 1000); this.lastDraw = nowMs;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     g.clearRect(0, 0, W, H);
-    const bg = g.createRadialGradient(W / 2, H / 2, 40, W / 2, H / 2, Math.max(W, H) * 0.75); bg.addColorStop(0, '#16223f'); bg.addColorStop(1, '#070b16');
-    g.fillStyle = bg; g.fillRect(0, 0, W, H);
-    const t = performance.now() / 1000;
+    g.drawImage(this.layer('bg', W, H, (c) => { c.fillStyle = '#0b1226'; c.fillRect(0, 0, W, H); const bg = c.createRadialGradient(W / 2, H / 2, 40, W / 2, H / 2, Math.max(W, H) * 0.75); bg.addColorStop(0, '#18264a'); bg.addColorStop(1, '#070b16'); c.fillStyle = bg; c.fillRect(0, 0, W, H); }), 0, 0, W, H);
+    if (this.shake > 0.3) { g.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake); this.shake *= Math.exp(-9 * dt); } else this.shake = 0;
+    if (s.g === 'hockey' && s.pad) {                         // your own paddle follows your pointer instantly (no network wait)
+      const me = this.getSide(), tg = this.myTarget;
+      if (tg && nowMs - tg.t < 500 && s.phase === 'play') {
+        if (!this.myPad) this.myPad = [s.pad[me][0], s.pad[me][1]];
+        const dx = tg.x - this.myPad[0], dz = tg.z - this.myPad[1], d = Math.hypot(dx, dz), max = 34 * dt;
+        if (d > max) { this.myPad[0] += dx / d * max; this.myPad[1] += dz / d * max; } else { this.myPad[0] = tg.x; this.myPad[1] = tg.z; }
+        s.pad[me] = [this.myPad[0], this.myPad[1]];
+      } else this.myPad = null;
+    }
+    const t = nowMs / 1000;
     ({ sumo: () => this.drawSumo(g, s, W, H, t), tag: () => this.drawTag(g, s, W, H, t), cycles: () => this.drawCycles(g, s, W, H, t), hockey: () => this.drawHockey(g, s, W, H, t), draw: () => this.drawQuick(g, s, W, H, t) })[s.g]();
+    for (let i = this.parts.length - 1; i >= 0; i--) {
+      const p = this.parts[i]; p.life -= dt; if (p.life <= 0) { this.parts.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.96; p.vy *= 0.96;
+      g.globalAlpha = clamp(p.life / p.max, 0, 1); g.fillStyle = p.col; g.beginPath(); g.arc(p.x, p.y, p.r, 0, 7); g.fill();
+    }
+    g.globalAlpha = 1;
   }
   cube(g, x, y, size, col, label, alpha = 1, angle = 0) {
     g.save(); g.translate(x, y); g.rotate(angle); g.globalAlpha = alpha;
-    g.shadowColor = col; g.shadowBlur = 18; g.fillStyle = col;
+    g.shadowColor = col; g.shadowBlur = 9; g.fillStyle = col;
     g.beginPath(); g.roundRect(-size / 2, -size / 2, size, size, size * 0.2); g.fill();
     g.shadowBlur = 0; g.fillStyle = 'rgba(255,255,255,0.22)'; g.beginPath(); g.roundRect(-size / 2 + 3, -size / 2 + 3, size - 6, size * 0.4, size * 0.15); g.fill();
     g.restore();
@@ -207,27 +243,40 @@ export class MiniUI {
   }
   drawSumo(g, s, W, H, t) {
     const sc = Math.min(W, H * 1.1) * 0.42 / 10, cx = W / 2, cy = H / 2 + 10, me = this.getSide();
-    g.fillStyle = 'rgba(255,255,255,0.5)'; for (let i = 0; i < 60; i++) { const x = (Math.sin(i * 91.3) * 0.5 + 0.5) * W, y = (Math.sin(i * 47.1 + 2) * 0.5 + 0.5) * H; g.fillRect(x, y, 2, 2); }
-    g.strokeStyle = 'rgba(255,255,255,0.08)'; g.setLineDash([6, 8]); g.beginPath(); g.arc(cx, cy, 10 * sc, 0, 7); g.stroke(); g.setLineDash([]);
-    const R = s.R * sc, danger = clamp(1 - (s.R - 3.6) / 6.4, 0, 1), rim = `hsl(${190 - danger * 190}, 100%, 60%)`;
-    const pl = g.createRadialGradient(cx, cy, 10, cx, cy, R); pl.addColorStop(0, '#2a3552'); pl.addColorStop(1, '#1a2238');
-    g.save(); g.shadowColor = rim; g.shadowBlur = 28 + danger * 20; g.fillStyle = pl; g.beginPath(); g.arc(cx, cy, R, 0, 7); g.fill(); g.restore();
-    g.strokeStyle = rim; g.lineWidth = 4; g.beginPath(); g.arc(cx, cy, R, 0, 7); g.stroke();
-    g.strokeStyle = 'rgba(255,255,255,0.06)'; g.lineWidth = 1; for (let r = 1; r < R / sc; r += 2) { g.beginPath(); g.arc(cx, cy, r * sc, 0, 7); g.stroke(); }
+    const Rq = Math.round(s.R * 8) / 8, R = Rq * sc, danger = clamp(1 - (Rq - 3.6) / 6.4, 0, 1), rim = `hsl(${190 - danger * 190}, 100%, 60%)`;
+    g.drawImage(this.layer('sumo' + Math.round(Rq * 8), W, H, (g) => {
+      g.fillStyle = 'rgba(255,255,255,0.5)'; for (let i = 0; i < 60; i++) { const x = (Math.sin(i * 91.3) * 0.5 + 0.5) * W, y = (Math.sin(i * 47.1 + 2) * 0.5 + 0.5) * H; g.fillRect(x, y, 2, 2); }
+      g.strokeStyle = 'rgba(255,255,255,0.08)'; g.setLineDash([6, 8]); g.beginPath(); g.arc(cx, cy, 10 * sc, 0, 7); g.stroke(); g.setLineDash([]);
+      const pl = g.createRadialGradient(cx, cy, 10, cx, cy, R); pl.addColorStop(0, '#2a3552'); pl.addColorStop(1, '#1a2238');
+      g.save(); g.shadowColor = rim; g.shadowBlur = 28 + danger * 20; g.fillStyle = pl; g.beginPath(); g.arc(cx, cy, R, 0, 7); g.fill(); g.restore();
+      g.strokeStyle = rim; g.lineWidth = 4; g.beginPath(); g.arc(cx, cy, R, 0, 7); g.stroke();
+      g.strokeStyle = 'rgba(255,255,255,0.06)'; g.lineWidth = 1; for (let r = 1; r < R / sc; r += 2) { g.beginPath(); g.arc(cx, cy, r * sc, 0, 7); g.stroke(); }
+    }), 0, 0, W, H);
+    this.sumoHit(s, t, sc, cx, cy);
     s.p.forEach((p, i) => {
       const x = cx + p[0] * sc, y = cy + p[1] * sc, fell = p[5], col = i === 0 ? BLUE : RED;
       if (p[6]) { g.strokeStyle = col; g.globalAlpha = 0.4; g.lineWidth = sc * 1.4; g.beginPath(); g.moveTo(x, y); g.lineTo(x - p[2] * 0.07 * sc, y - p[3] * 0.07 * sc); g.stroke(); g.globalAlpha = 1; }
+      const m = this.mem; m.dash = m.dash || [0, 0]; m.fell = m.fell || [0, 0];
+      if (p[6] && !m.dash[i]) this.burst(x, y, 14, col, sc * 9);
+      if (fell && !m.fell[i]) { this.burst(x, y, 45, col, sc * 11); this.shakeNow(10); }
+      m.dash[i] = p[6]; m.fell[i] = fell;
       this.cube(g, x, y, sc * 1.9, col, i === me ? 'YOU' : '', fell ? 0.45 : 1, Math.atan2(p[3], p[2]) * 0.15);
       if (!fell) { const cd = clamp(p[4] / 1.5, 0, 1); g.strokeStyle = cd > 0 ? 'rgba(255,255,255,0.35)' : '#7dffb2'; g.lineWidth = 3; g.beginPath(); g.arc(x, y, sc * 1.3, -Math.PI / 2, -Math.PI / 2 + (1 - cd) * Math.PI * 2); g.stroke(); }
     });
+  }
+  sumoHit(s, t, sc, cx, cy) {
+    const a = s.p[0], b = s.p[1], m = this.mem;
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 2.2 && t - (m.hit || 0) > 0.3 && Math.hypot(a[2] - b[2], a[3] - b[3]) > 5) { m.hit = t; this.burst(cx + (a[0] + b[0]) / 2 * sc, cy + (a[1] + b[1]) / 2 * sc, 18, '#fff', sc * 9); this.shakeNow(6); sfx.hit(); }
   }
   drawTag(g, s, W, H, t) {
     const sc = Math.min(W * 0.9 / (s.hw * 2), H * 0.8 / (s.hh * 2)), cx = W / 2, cy = H / 2 + 10, me = this.getSide();
     const heat = s.u * s.u;
     if (s.phase === 'play') { const p = 0.5 + 0.5 * Math.sin(t * (3 + s.u * 22) * 2); g.fillStyle = `rgba(255,40,20,${heat * 0.22 * p})`; g.fillRect(0, 0, W, H); }
+    g.drawImage(this.layer('tag', W, H, (g) => {
     g.save(); g.shadowColor = '#7b5cff'; g.shadowBlur = 24; g.strokeStyle = '#7b5cff'; g.lineWidth = 4; g.fillStyle = '#10182e'; g.beginPath(); g.roundRect(cx - s.hw * sc, cy - s.hh * sc, s.hw * 2 * sc, s.hh * 2 * sc, 18); g.fill(); g.stroke(); g.restore();
     g.strokeStyle = 'rgba(255,255,255,0.05)'; for (let x = -s.hw; x <= s.hw; x += 2) { g.beginPath(); g.moveTo(cx + x * sc, cy - s.hh * sc); g.lineTo(cx + x * sc, cy + s.hh * sc); g.stroke(); }
     for (const [px, pz] of s.pillars) { g.save(); g.shadowColor = '#a58bff'; g.shadowBlur = 14; g.fillStyle = '#2b2f55'; g.strokeStyle = '#a58bff'; g.lineWidth = 3; g.beginPath(); g.arc(cx + px * sc, cy + pz * sc, s.pr * sc, 0, 7); g.fill(); g.stroke(); g.restore(); }
+    }), 0, 0, W, H);
     s.p.forEach((p, i) => {
       const x = cx + p[0] * sc, y = cy + p[1] * sc, col = i === 0 ? BLUE : RED, holder = s.holder === i;
       this.cube(g, x, y, sc * 1.7, col, i === me ? 'YOU' : '', p[5] ? 0.6 : 1, Math.atan2(p[3], p[2]) * 0.1);
@@ -238,32 +287,49 @@ export class MiniUI {
       if (p[5]) { g.fillStyle = '#fff27a'; g.font = '16px system-ui'; g.textAlign = 'center'; g.fillText('✦ ✦', x, y - sc * 1.4); }
     });
     if (s.flash) { g.fillStyle = 'rgba(255,255,255,0.15)'; g.fillRect(0, 0, W, H); }
+    const m = this.mem, hp = s.p[s.holder], hx = cx + hp[0] * sc, hy = cy + hp[1] * sc;
+    if (s.flash && !m.flash) { this.burst(hx, hy, 24, '#ffd34d', sc * 10); this.shakeNow(5); }
+    if (s.phase === 'roundEnd' && m.phase !== 'roundEnd' && /blew/.test(s.banner)) { this.burst(hx, hy, 90, '#ff9d2b', sc * 18); this.burst(hx, hy, 40, '#fff', sc * 12); this.shakeNow(18); sfx.explode(); }
+    m.flash = s.flash; m.phase = s.phase;
   }
   drawCycles(g, s, W, H, t) {
     const sc = Math.min(W * 0.94 / s.W, H * 0.8 / s.H), cx = W / 2 - s.W * sc / 2, cy = H / 2 - s.H * sc / 2 + 12, me = this.getSide();
+    g.drawImage(this.layer('cyc' + s.W + 'x' + s.H, W, H, (g) => {
     g.save(); g.shadowColor = '#18e0ff'; g.shadowBlur = 20; g.fillStyle = '#060c1c'; g.strokeStyle = '#18e0ff'; g.lineWidth = 3; g.fillRect(cx, cy, s.W * sc, s.H * sc); g.strokeRect(cx, cy, s.W * sc, s.H * sc); g.restore();
     g.strokeStyle = 'rgba(24,224,255,0.07)'; g.lineWidth = 1; for (let x = 0; x <= s.W; x++) { g.beginPath(); g.moveTo(cx + x * sc, cy); g.lineTo(cx + x * sc, cy + s.H * sc); g.stroke(); } for (let y = 0; y <= s.H; y++) { g.beginPath(); g.moveTo(cx, cy + y * sc); g.lineTo(cx + s.W * sc, cy + y * sc); g.stroke(); }
+    }), 0, 0, W, H);
     s.trails.forEach((tr, i) => {
-      const col = i === 0 ? '#3d84ff' : '#ff5a4d'; g.save(); g.shadowColor = col; g.shadowBlur = 12; g.fillStyle = col;
-      for (const idx of tr) g.fillRect(cx + (idx % s.W) * sc + 1, cy + Math.floor(idx / s.W) * sc + 1, sc - 2, sc - 2); g.restore();
+      const col = i === 0 ? '#3d84ff' : '#ff5a4d'; if (!tr.length) return;
+      g.save(); g.shadowColor = col; g.shadowBlur = 14; g.strokeStyle = col; g.lineWidth = sc * 0.62; g.lineJoin = 'round'; g.lineCap = 'round'; g.beginPath();
+      tr.forEach((idx, k) => { const px = cx + (idx % s.W) * sc + sc / 2, py = cy + Math.floor(idx / s.W) * sc + sc / 2; if (k) g.lineTo(px, py); else g.moveTo(px, py); });
+      g.stroke(); g.restore();
     });
+    const m = this.mem; m.dead = m.dead || [0, 0];
+    s.c.forEach((c, i) => { if (c[3] && !m.dead[i]) { this.burst(cx + c[0] * sc + sc / 2, cy + c[1] * sc + sc / 2, 50, i ? '#ff8a7e' : '#8fb8ff', sc * 14); this.shakeNow(12); sfx.crash(); } m.dead[i] = c[3]; });
     s.c.forEach((c, i) => {
       const x = cx + c[0] * sc + sc / 2, y = cy + c[1] * sc + sc / 2;
-      g.save(); g.shadowColor = '#fff'; g.shadowBlur = 22; g.fillStyle = c[3] ? '#ff9d2b' : '#fff'; g.beginPath(); g.arc(x, y, sc * (c[3] ? 1.4 + 0.3 * Math.sin(t * 20) : 0.75), 0, 7); g.fill(); g.restore();
+      g.save(); g.shadowColor = '#fff'; g.shadowBlur = 10; g.fillStyle = c[3] ? '#ff9d2b' : '#fff'; g.beginPath(); g.arc(x, y, sc * (c[3] ? 1.4 + 0.3 * Math.sin(t * 20) : 0.75), 0, 7); g.fill(); g.restore();
       if (i === me) { g.fillStyle = '#fff'; g.font = 'bold 12px system-ui'; g.textAlign = 'center'; g.fillText('YOU', x, y - sc * 1.3); }
     });
   }
   drawHockey(g, s, W, H, t) {
     const sc = Math.min(W * 0.94 / (s.hw * 2), H * 0.78 / (s.hh * 2)), cx = W / 2, cy = H / 2 + 14, me = this.getSide();
     this.hk = { s: sc, ox: cx, oy: cy };
+    g.drawImage(this.layer('hock', W, H, (g) => {
     g.save(); g.shadowColor = '#4fb8ff'; g.shadowBlur = 26; g.fillStyle = '#0d1d3a'; g.strokeStyle = '#4fb8ff'; g.lineWidth = 4; g.beginPath(); g.roundRect(cx - s.hw * sc, cy - s.hh * sc, s.hw * 2 * sc, s.hh * 2 * sc, 36); g.fill(); g.stroke(); g.restore();
     g.strokeStyle = 'rgba(120,200,255,0.35)'; g.lineWidth = 3; g.beginPath(); g.moveTo(cx, cy - s.hh * sc); g.lineTo(cx, cy + s.hh * sc); g.stroke(); g.beginPath(); g.arc(cx, cy, 2.6 * sc, 0, 7); g.stroke();
     for (const sd of [-1, 1]) { g.save(); g.shadowColor = sd < 0 ? BLUE : RED; g.shadowBlur = 24; g.strokeStyle = sd < 0 ? BLUE : RED; g.lineWidth = 8; g.beginPath(); g.moveTo(cx + sd * s.hw * sc, cy - s.gw * sc); g.lineTo(cx + sd * s.hw * sc, cy + s.gw * sc); g.stroke(); g.restore(); g.fillStyle = (sd < 0 ? BLUE : RED) + '33'; g.fillRect(sd < 0 ? cx - s.hw * sc - 26 : cx + s.hw * sc, cy - s.gw * sc, 26, s.gw * 2 * sc); }
-    s.pad.forEach((p, i) => { const col = i === 0 ? BLUE : RED; g.save(); g.shadowColor = col; g.shadowBlur = 20; g.fillStyle = col; g.beginPath(); g.arc(cx + p[0] * sc, cy + p[1] * sc, s.pr * sc, 0, 7); g.fill(); g.fillStyle = 'rgba(255,255,255,0.35)'; g.beginPath(); g.arc(cx + p[0] * sc, cy + p[1] * sc, s.pr * sc * 0.5, 0, 7); g.fill(); g.restore(); if (i === me) { g.fillStyle = '#fff'; g.font = 'bold 12px system-ui'; g.textAlign = 'center'; g.fillText('YOU', cx + p[0] * sc, cy + p[1] * sc - s.pr * sc - 6); } });
-    const u = s.puck, sp = Math.hypot(u[2], u[3]);
-    g.save(); g.shadowColor = '#fff'; g.shadowBlur = 12 + sp; g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = s.ur * sc * 1.2; g.lineCap = 'round'; g.beginPath(); g.moveTo(cx + u[0] * sc, cy + u[1] * sc); g.lineTo(cx + (u[0] - u[2] * 0.03) * sc, cy + (u[1] - u[3] * 0.03) * sc); g.stroke(); g.fillStyle = '#f5f7ff'; g.beginPath(); g.arc(cx + u[0] * sc, cy + u[1] * sc, s.ur * sc, 0, 7); g.fill(); g.restore();
+    }), 0, 0, W, H);
+    s.pad.forEach((p, i) => { const col = i === 0 ? BLUE : RED; g.save(); g.shadowColor = col; g.shadowBlur = 10; g.fillStyle = col; g.beginPath(); g.arc(cx + p[0] * sc, cy + p[1] * sc, s.pr * sc, 0, 7); g.fill(); g.fillStyle = 'rgba(255,255,255,0.35)'; g.beginPath(); g.arc(cx + p[0] * sc, cy + p[1] * sc, s.pr * sc * 0.5, 0, 7); g.fill(); g.restore(); if (i === me) { g.fillStyle = '#fff'; g.font = 'bold 12px system-ui'; g.textAlign = 'center'; g.fillText('YOU', cx + p[0] * sc, cy + p[1] * sc - s.pr * sc - 6); } });
+    const u = s.puck, sp = Math.hypot(u[2], u[3]), m = this.mem;
+    if (m.sp !== undefined && Math.abs(sp - m.sp) > 9 && t - (m.hit || 0) > 0.08) { m.hit = t; this.burst(cx + u[0] * sc, cy + u[1] * sc, 14, '#bfe6ff', sc * 8); this.shakeNow(2.5); sfx.hit(); }
+    m.sp = sp;
+    if (s.phase === 'roundEnd' && m.phase !== 'roundEnd' && /GOAL/.test(s.banner)) { const gx = u[0] > 0 ? cx + s.hw * sc : cx - s.hw * sc; this.burst(gx, cy, 80, u[0] > 0 ? BLUE : RED, sc * 16); this.shakeNow(14); sfx.goal(); }
+    m.phase = s.phase;
+    g.save(); g.shadowColor = '#fff'; g.shadowBlur = 8; g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = s.ur * sc * 1.2; g.lineCap = 'round'; g.beginPath(); g.moveTo(cx + u[0] * sc, cy + u[1] * sc); g.lineTo(cx + (u[0] - u[2] * 0.03) * sc, cy + (u[1] - u[3] * 0.03) * sc); g.stroke(); g.fillStyle = '#f5f7ff'; g.beginPath(); g.arc(cx + u[0] * sc, cy + u[1] * sc, s.ur * sc, 0, 7); g.fill(); g.restore();
   }
   drawQuick(g, s, W, H, t) {
+    const m = this.mem; if (s.phase === 'roundEnd' && m.phase !== 'roundEnd') { this.shakeNow(/jumped/.test(s.banner) ? 14 : 8); if (/jumped/.test(s.banner)) sfx.crash(); } m.phase = s.phase;
     let col = '#7a1b1b', text = 'WAIT…', sub = 'Do NOT press yet';
     if (s.phase === 'play') { if (s.go) { col = '#10c76a'; text = 'NOW!'; sub = 'SPACE / click / tap'; } else if (s.decoy) { col = '#d9a400'; text = 'TRAP!'; sub = 'not yet…'; } }
     else if (s.phase === 'countdown') { col = '#1a2440'; text = 'Get ready'; sub = ''; }

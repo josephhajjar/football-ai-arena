@@ -343,7 +343,7 @@ export class MiniSession {
       const dt = Math.min(0.1, (t - this.lastTick) / 1000); this.lastTick = t;
       this.game.step(dt, t);
       this.sendAcc += dt;
-      const every = this.gameId === 'cycles' ? 1 / 20 : 1 / 30;
+      const every = this.gameId === 'cycles' ? 1 / 30 : 1 / 60;
       if (this.sendAcc >= every) { this.sendAcc = 0; this.send({ t: 'mg', s: this.game.snapshot() }); }
       if (this.game.phase === 'done') {
         const g = this.game;

@@ -24,6 +24,7 @@ e.g. `cloudflared tunnel --url http://localhost:3000`, and send the printed URL.
 ## While you wait: minigames, coins, power-ups
 - **Minigames** pop up during training (host sets interval, best-of, which games, coin payout): Cube Sumo, Bomb Tag,
   Light Cycles, Air Hockey, Quick Draw. Real-time 1v1, server-authoritative. Winning pays more coins.
+- **Cube Clicker** fills the gaps between minigames: trophies pay coins (capped, server-checked).
 - **Live series**: matches now run live on the server and stream to both browsers. Spend coins on power-ups
   (Turbo, Power Boots, Iron Cube, Tight Goal) and hazards (Wide Goal, Bomb, Mud Pit, Ice Beam, Confusion).
   Hotkeys Q W E R T A S D F; bombs/mud: click the pitch. Coins also come from goals, match wins and time played.

@@ -52,6 +52,13 @@ const w = await H.waitFor('welcome'); assert.equal(w.side, 'blue'); assert.equal
 // ---- training + minigame ----
 assert.equal((await post(`/api/rooms/${host.code}/start`, { token: host.token, minutes: 5 })).status, 200);
 assert.equal((await post(`/api/rooms/${host.code}/settings`, { token: host.token, settings: {} })).status, 409, 'settings locked after start');
+// ---- Cube Clicker payout: capped by training time, cheating gets nothing extra ----
+G.send({ t: 'clicker', score: 5000 });
+const ck1 = await G.waitFor('coins', 5000, (m) => m.src === 'clicker'); assert.equal(ck1.gain[1], 4, 'first minute is capped at 4 coins');
+await sleep(900); G.send({ t: 'clicker', score: 1e15 }); await sleep(500);
+assert.equal(G.msgs.filter((m) => m.t === 'coins' && m.src === 'clicker').length, 1, 'huge fake score gets no extra coins inside the time cap');
+G.send({ t: 'clicker', score: -5 }); G.send({ t: 'clicker', score: 'abc' });
+console.log('clicker cap OK');
 const inv = await H.waitFor('mg_invite', 30000); assert.equal(inv.id, 'draw');
 await G.waitFor('mg_invite');
 H.send({ t: 'mg_join' }); G.send({ t: 'mg_join' });
@@ -63,7 +70,7 @@ const res = await H.waitFor('mg_result', 60000);
 H.onmsg = null; void pressedRounds;
 assert.equal(res.winner, 0); assert.deepEqual(res.scores, [3, 0]);
 assert.deepEqual(res.coins, [Math.round((25 + 3 * 3) * 2), Math.round(8 * 2)], 'coins pay 2x multiplier');
-const coinMsg = await H.waitFor('coins'); assert.deepEqual(coinMsg.c, res.coins);
+const coinMsg = await H.waitFor('coins', 20000, (m) => m.src !== 'clicker'); assert.deepEqual(coinMsg.c, [res.coins[0], res.coins[1] + 4]);
 await H.waitFor('mg_end', 15000);
 let st = await get(`/api/rooms/${host.code}/state?token=${host.token}`);
 assert.equal(st.coins, res.coins[0]); assert.equal(st.mini, null);

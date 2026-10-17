@@ -19,6 +19,7 @@ import { buildRules } from '../tools/gen_rules.js';
 import { attachWebSocket } from './ws.js';
 import { LiveSeries } from './live.js';
 import { GAMES, MiniSession } from './minigames.js';
+import { coinsForScore, clickerCap, MAX_CLICKER_COINS } from '../src/clicker.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 3000);
@@ -125,7 +126,7 @@ function startTraining(room, minutes) {
   room.trainStartAt = now();
   room.trainEndAt = room.trainStartAt + minutes * 60000;
   room.nextMgAt = room.trainStartAt + room.settings.minigames.firstAtMin * 60000 * TIME_SCALE;
-  room.mgQueue = [];
+  room.mgQueue = []; room.clickGranted = [0, 0];
   room.phase = 'training';
 }
 
@@ -203,7 +204,7 @@ setInterval(() => {
     try { mg.tick(); } catch (e) { console.error('minigame error', e); mg.cancel(); }
     if (mg.closed) { room.mg = null; room.nextMgAt = now() + room.settings.minigames.intervalMin * 60000 * TIME_SCALE; }
   }
-}, 33);
+}, 8);
 
 // ---------- API ----------
 async function api(req, res, url) {
@@ -215,7 +216,7 @@ async function api(req, res, url) {
     if (rooms.size >= 200) return json(res, 503, { error: 'Server is full, try again later.' });
     const code = newCode(), token = rid(12);
     rooms.set(code, { code, createdAt: now(), phase: 'lobby', blue: { name: cleanName(b.name, 'Blue'), token }, red: null,
-      settings: defaultSettings(), coins: [0, 0], conns: new Set(), mg: null, mgQueue: [], nextMgAt: 0, live: null });
+      settings: defaultSettings(), coins: [0, 0], clickGranted: [0, 0], conns: new Set(), mg: null, mgQueue: [], nextMgAt: 0, live: null });
     return json(res, 200, { code, token, side: 'blue' });
   }
 
@@ -284,7 +285,7 @@ async function api(req, res, url) {
     if (me !== 'blue') return json(res, 403, { error: 'Only the room creator can start a rematch.' });
     if (room.phase !== 'done') return json(res, 409, { error: 'The series is not finished yet.' });
     for (const s of ['blue', 'red']) { room[s].weights = null; room[s].locked = false; room[s].summary = null; }
-    room.result = null; room.phase = 'lobby'; room.trainStartAt = room.trainEndAt = null; room.coins = [0, 0]; room.mg = null;
+    room.result = null; room.phase = 'lobby'; room.trainStartAt = room.trainEndAt = null; room.coins = [0, 0]; room.clickGranted = [0, 0]; room.mg = null;
     sendRoom(room, { t: 'rematch' });
     return json(res, 200, publicState(room, b.token));
   }
@@ -391,6 +392,17 @@ attachWebSocket(server, (conn) => {
     if (m.t === 'mg_join' && room.mg) room.mg.join(idx);
     else if (m.t === 'mg_decline' && room.mg) room.mg.decline(idx);
     else if (m.t === 'mg_input' && room.mg) room.mg.input(idx, m.i);
+    else if (m.t === 'clicker' && room.phase === 'training') {
+      // Cube Clicker payout: coins for trophies reached, never more than the time cap allows
+      const t = now(); if (t - (conn.data.lastClick || 0) < 700) return; conn.data.lastClick = t;
+      const score = Number(m.score); if (!Number.isFinite(score) || score < 0) return;
+      const target = Math.min(coinsForScore(score), clickerCap((t - room.trainStartAt) / 60000), MAX_CLICKER_COINS), delta = target - room.clickGranted[idx];
+      if (delta > 0) {
+        room.clickGranted[idx] = target; room.coins[idx] += delta;
+        const gain = [0, 0]; gain[idx] = delta;
+        sendRoom(room, { t: 'coins', c: room.coins, gain, src: 'clicker' });
+      }
+    }
     else if (m.t === 'power' && room.live) {
       const r = room.live.command(side, m);
       conn.send({ t: 'power_result', req: m.req, ...r });

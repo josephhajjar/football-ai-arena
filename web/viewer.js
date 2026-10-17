@@ -91,7 +91,7 @@ export class Viewer {
     this.series = null; this.getTime = () => 0; this.onHud = () => {}; this.onEvent = () => {};
     this.snapCam = true; this.prevBall = null; this.flash = [0, 0, 0, 0];
     this.shakeAmp = 0; this.blasts = []; this.goalFlash = 0; this.fxNow = NOFX; this.time = 0;
-    this.preview = null;
+    this.preview = null; this.active = false;
     this.build();
     this.bindInput();
     this.resize();
@@ -370,6 +370,7 @@ export class Viewer {
   // ---------- frame ----------
   frame(dt) {
     this.time += dt;
+    if (!this.active) return;      // stage hidden (e.g. a minigame is on top): do not burn GPU
     if (!this.series || !this.series.matches.length) { this.renderer.render(this.scene, this.camera); return; }
     const t = this.getTime();
     const { i, m, local, fpos } = this.locate(t);

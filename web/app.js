@@ -7,6 +7,7 @@ import { CONFIG as C, POWERS } from '/src/config.js';
 import { Net } from '/net.js';
 import { MiniUI } from '/minigames.js';
 import { sfx } from '/audio.js';
+import { Clicker } from '/clicker.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -175,6 +176,7 @@ function updateHud(h) {
 function showStage(on) {
   $('stage').classList.toggle('hidden', !on);
   if (on) { ensureViewer(); viewer.resize(); }
+  if (viewer) viewer.active = on;
   refreshShop();
 }
 function togglePause() { playback.paused = !playback.paused; $('pbPlay').textContent = playback.paused ? '▶' : '⏸'; }
@@ -275,7 +277,16 @@ function onPick(e) {
 }
 
 // ---------------- WebSocket: live match + minigames ----------------
-let mini = null;
+let mini = null, clicker = null, clickerKey = null;
+function syncClicker() {
+  const card = $('clickerCard'), want = !!(state && state.phase === 'training' && state.me);
+  if (!want) { if (clickerKey) { clicker.unmount(); clickerKey = null; } card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  const key = `fb.clicker.${state.code}.${state.trainStartAt}.${state.me}`;
+  if (clickerKey === key) return;
+  clicker = clicker || new Clicker(card, { report: (score) => net.send({ t: 'clicker', score }), toast });
+  clicker.mount(key); clickerKey = key;
+}
 function setCoins(n, gain) {
   const was = coins; coins = n;
   for (const id of ['roomCoins', 'coinChip']) { const el = document.getElementById(id); if (el) { el.textContent = `🪙 ${coins}`; if (n !== was) { el.classList.remove('pulse'); void el.offsetWidth; el.classList.add('pulse'); } } }
@@ -359,7 +370,7 @@ function enterRoom(s) {
 }
 function leaveRoom() {
   store.del('fb.current'); document.title = 'Football AI Arena';
-  clearInterval(pollTimer); net.close(); if (mini) mini.end(); session = null; state = null; live = null; showStage(false); playback.mode = 'none';
+  clearInterval(pollTimer); net.close(); if (mini) mini.end(); if (clickerKey) { clicker.unmount(); clickerKey = null; } $('clickerCard').classList.add('hidden'); session = null; state = null; live = null; showStage(false); playback.mode = 'none';
   $('room').classList.add('hidden'); $('home').classList.remove('hidden'); $('roomTag').classList.add('hidden'); history.replaceState(null, '', location.pathname);
 }
 
@@ -376,6 +387,7 @@ async function poll() {
     if (rest.me === 'blue' && rest.phase === 'lobby') delete rest.settings;       // the host's own edits must not re-render the form under their fingers
     const sig = JSON.stringify(rest);
     if (sig !== sigPrev) { sigPrev = sig; renderRoom(); }
+    syncClicker();
   } catch (e) { notice(e.message); if (/not found/i.test(e.message)) { store.del('fb.current'); leaveRoom(); } }
   polling = false;
 }

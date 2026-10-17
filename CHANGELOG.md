@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.1.0 - Downtime update
+- **Cube Clicker**: an idle/clicker game for the training downtime. Click the ball, buy helpers and upgrades, catch Golden Boots. Trophies pay coins (server-checked and capped by training time).
+- **Minigame lag fixes**: hidden 3D stadium no longer renders behind minigames, cached canvas art, 60 Hz server loop and snapshots, dead-reckoning on the client, instant local paddle in Air Hockey, no more full-screen blur.
+- **Minigame polish**: particles, screen shake, impact sounds.
+
 ## v2.0.0 - Energy update
 - AIs choose **kick angle** (0-70 deg) and **kick strength** (6-20 m/s); old weights files still work.
 - **Live matches**: the server runs the series in real time and streams it over WebSockets.
