@@ -278,8 +278,13 @@ function onPick(e) {
 
 // ---------------- WebSocket: live match + minigames ----------------
 let mini = null, clicker = null, clickerKey = null;
+function clickerEl() {                       // created on demand, so an old cached page can never break it
+  let el = document.getElementById('clickerCard');
+  if (!el) { el = document.createElement('section'); el.id = 'clickerCard'; el.className = 'card hidden'; const room = document.getElementById('room'); (room && room.parentNode ? room.parentNode : document.body).insertBefore(el, room ? room.nextSibling : null); }
+  return el;
+}
 function syncClicker() {
-  const card = $('clickerCard'), want = !!(state && state.phase === 'training' && state.me);
+  const card = clickerEl(), want = !!(state && state.phase === 'training' && state.me);
   if (!want) { if (clickerKey) { clicker.unmount(); clickerKey = null; } card.classList.add('hidden'); return; }
   card.classList.remove('hidden');
   const key = `fb.clicker.${state.code}.${state.trainStartAt}.${state.me}`;
@@ -370,7 +375,7 @@ function enterRoom(s) {
 }
 function leaveRoom() {
   store.del('fb.current'); document.title = 'Football AI Arena';
-  clearInterval(pollTimer); net.close(); if (mini) mini.end(); if (clickerKey) { clicker.unmount(); clickerKey = null; } $('clickerCard').classList.add('hidden'); session = null; state = null; live = null; showStage(false); playback.mode = 'none';
+  clearInterval(pollTimer); net.close(); if (mini) mini.end(); if (clickerKey) { clicker.unmount(); clickerKey = null; } clickerEl().classList.add('hidden'); session = null; state = null; live = null; showStage(false); playback.mode = 'none';
   $('room').classList.add('hidden'); $('home').classList.remove('hidden'); $('roomTag').classList.add('hidden'); history.replaceState(null, '', location.pathname);
 }
 
